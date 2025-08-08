@@ -18,6 +18,8 @@ serve(async (req) => {
       throw new Error('No authorization header');
     }
 
+    const { type = 'general' } = await req.json().catch(() => ({}));
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_ANON_KEY') ?? '',
@@ -56,44 +58,24 @@ serve(async (req) => {
       );
     }
 
-    // Generate insights using AI
+    // Generate real-time insights using AI
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
     const claudeApiKey = Deno.env.get('CLAUDE_API_KEY');
 
     let insights;
     if (openAIApiKey) {
       console.log('Using OpenAI for insights generation');
-      insights = await generateInsightsWithOpenAI(openAIApiKey, entries);
+      insights = await generateInsightsWithOpenAI(openAIApiKey, entries, type);
     } else if (claudeApiKey) {
       console.log('Using Claude for insights generation');
-      insights = await generateInsightsWithClaude(claudeApiKey, entries);
+      insights = await generateInsightsWithClaude(claudeApiKey, entries, type);
     } else {
       throw new Error('No AI API keys configured');
     }
 
-    // Save insights to database
-    const savedInsights = [];
-    for (const insight of insights) {
-      const { data: savedInsight, error: saveError } = await supabaseClient
-        .from('insights')
-        .insert({
-          user_id: user.id,
-          insight_text: insight.insight_text,
-          action_plan: insight.action_plan,
-          category_id: insight.category_id,
-        })
-        .select()
-        .single();
-
-      if (saveError) {
-        console.error('Error saving insight:', saveError);
-      } else {
-        savedInsights.push(savedInsight);
-      }
-    }
-
+    // Return real-time insights without saving to database
     return new Response(
-      JSON.stringify({ insights: savedInsights }),
+      JSON.stringify({ insights }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
@@ -106,7 +88,7 @@ serve(async (req) => {
   }
 });
 
-async function generateInsightsWithOpenAI(apiKey: string, entries: any[]) {
+async function generateInsightsWithOpenAI(apiKey: string, entries: any[], type: string) {
   const entriesText = entries.map(entry => 
     `[${entry.created_at}] ${entry.categories?.name ? `(${entry.categories.name})` : ''} ${entry.content}`
   ).join('\n\n');
@@ -122,25 +104,21 @@ async function generateInsightsWithOpenAI(apiKey: string, entries: any[]) {
       messages: [
         {
           role: 'system',
-          content: `You are an insightful AI analyst. Analyze these personal journal entries and provide meaningful insights about patterns, trends, or recommendations.
+          content: `You are an insightful AI analyst. Analyze these personal journal entries and provide meaningful ${type} based on the user's request.
 
-Generate 3-5 insights in JSON format:
+${getPromptForType(type)}
+
+Generate 3-5 items in JSON format:
 [
   {
-    "insight_text": "A meaningful observation or pattern you noticed",
-    "action_plan": "Specific, actionable suggestions based on this insight",
-    "category_id": null
+    "type": "${type}",
+    "title": "Brief, engaging title",
+    "content": "Detailed content based on the analysis",
+    "priority": "high|medium|low" (optional)
   }
 ]
 
-Focus on:
-- Behavioral patterns
-- Goal progress
-- Emotional trends
-- Life balance
-- Growth opportunities
-
-Be encouraging, constructive, and specific.`
+Be encouraging, constructive, and specific. Focus on actionable content.`
         },
         {
           role: 'user',
@@ -170,7 +148,7 @@ Be encouraging, constructive, and specific.`
   }
 }
 
-async function generateInsightsWithClaude(apiKey: string, entries: any[]) {
+async function generateInsightsWithClaude(apiKey: string, entries: any[], type: string) {
   const entriesText = entries.map(entry => 
     `[${entry.created_at}] ${entry.categories?.name ? `(${entry.categories.name})` : ''} ${entry.content}`
   ).join('\n\n');
@@ -188,28 +166,24 @@ async function generateInsightsWithClaude(apiKey: string, entries: any[]) {
       messages: [
         {
           role: 'user',
-          content: `You are an insightful AI analyst. Analyze these personal journal entries and provide meaningful insights about patterns, trends, or recommendations.
+          content: `You are an insightful AI analyst. Analyze these personal journal entries and provide meaningful ${type} based on the user's request.
 
 Here are the entries:
 ${entriesText}
 
-Generate 3-5 insights in this exact JSON format:
+${getPromptForType(type)}
+
+Generate 3-5 items in this exact JSON format:
 [
   {
-    "insight_text": "A meaningful observation or pattern you noticed",
-    "action_plan": "Specific, actionable suggestions based on this insight",
-    "category_id": null
+    "type": "${type}",
+    "title": "Brief, engaging title", 
+    "content": "Detailed content based on the analysis",
+    "priority": "high|medium|low" (optional)
   }
 ]
 
-Focus on:
-- Behavioral patterns
-- Goal progress  
-- Emotional trends
-- Life balance
-- Growth opportunities
-
-Be encouraging, constructive, and specific.`
+Be encouraging, constructive, and specific. Focus on actionable content.`
         }
       ]
     }),
@@ -227,9 +201,52 @@ Be encouraging, constructive, and specific.`
   } catch {
     // Fallback if JSON parsing fails
     return [{
-      insight_text: "Unable to generate structured insights at this time.",
-      action_plan: null,
-      category_id: null
+      type,
+      title: "Analysis Unavailable",
+      content: "Unable to generate structured insights at this time. Please try again.",
+      priority: "low"
     }];
+  }
+}
+
+function getPromptForType(type: string): string {
+  switch (type) {
+    case 'insights':
+      return `Focus on deep insights and patterns. Look for:
+- Behavioral patterns and trends
+- Emotional patterns and triggers  
+- Life balance observations
+- Personal growth opportunities`;
+    
+    case 'actions':
+      return `Focus on specific, actionable recommendations. Provide:
+- Immediate next steps the user can take
+- Concrete actions based on their entries
+- Time-bound suggestions
+- Goal-oriented tasks`;
+    
+    case 'suggestions':
+      return `Focus on helpful suggestions and recommendations. Include:
+- Lifestyle improvements
+- Habit modifications
+- Resource recommendations
+- Environmental changes`;
+    
+    case 'habits':
+      return `Focus on habit formation and tracking. Analyze:
+- Current habit patterns
+- Habit formation opportunities
+- Habit stacking possibilities
+- Progress tracking suggestions`;
+    
+    case 'patterns':
+      return `Focus on data patterns and calendar insights. Look for:
+- Temporal patterns (time of day, days of week)
+- Seasonal trends
+- Recurring themes
+- Calendar-based observations`;
+    
+    default:
+      return `Focus on general insights and observations about the user's journal entries.`;
   }
 }
