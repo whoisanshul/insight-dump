@@ -1,7 +1,7 @@
 import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'app.lovable.1f1effb2253c44f7847788c9e1d4bfa6',
+  appId: 'app.lovable.insight-dump',
   appName: 'insight-dump',
   webDir: 'dist',
   server: {
